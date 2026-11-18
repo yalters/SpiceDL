@@ -9,7 +9,10 @@
 ### Bare Metal
 
 #### 1. Install extension
-Install SpiceDL from Spicetify marketplace or [releases](https://github.com/FoxRefire/SpiceDL/releases/download/1.0/spicedl.js)
+Install [SpiceDL releases](https://github.com/yalters/SpiceDL/blob/main/spicedl.js) and put it in Spiceify Config Directory > Extensions
+```bash
+spicetify config-dir
+```
 
 #### 2. Install backend API
 * [Windows](https://github.com/FoxRefire/SpiceDL/releases/download/2.0/api-windows.exe)
