@@ -1,0 +1,45 @@
+{
+  "ui": {
+    "title": "Impostazioni API SpiceDL",
+    "subtitle": "Configura le impostazioni di download e le preferenze del server",
+    "download_settings": "Impostazioni Download",
+    "download_folder": "Cartella Download",
+    "download_folder_placeholder": "Seleziona una cartella per i download...",
+    "browse": "Sfoglia...",
+    "server_settings": "Impostazioni Server",
+    "host_address": "Indirizzo Host",
+    "port_number": "Numero Porta",
+    "cancel": "Annulla",
+    "save": "Salva",
+    "select_download_folder": "Seleziona Cartella Download",
+    "success": "Successo",
+    "settings_saved": "Impostazioni salvate con successo!",
+    "error": "Errore",
+    "invalid_input": "Input non valido: {message}",
+    "failed_to_save": "Impossibile salvare le impostazioni: {message}",
+    "port_required": "Il numero di porta è richiesto",
+    "port_range": "La porta deve essere compresa tra 1 e 65535",
+    "folder_required": "La cartella di download è richiesta",
+    "host_required": "L'indirizzo host è richiesto"
+  },
+  "tray": {
+    "tooltip": "Server API SpiceDL",
+    "settings": "Impostazioni",
+    "status": "Stato",
+    "quit": "Esci",
+    "active_downloads": "Download attivi: {count}"
+  },
+  "dependencies": {
+    "title": "Dipendenze Richieste Non Trovate",
+    "message": "Le seguenti dipendenze non sono installate:\n\n{missing}\n\nQueste devono essere installate per utilizzare la funzionalità di download.",
+    "spotdl_not_found": "spotdl",
+    "ffmpeg_not_found": "ffmpeg",
+    "yt_dlp_not_found": "yt-dlp",
+    "install_instructions": "Istruzioni di installazione:",
+    "spotdl_install": "spotdl:\n  pip install spotdl\n  oppure\n  pip install git+https://github.com/spotDL/spotify-downloader.git",
+    "ffmpeg_install": "ffmpeg:\n  Linux: sudo apt-get install ffmpeg\n  macOS: brew install ffmpeg\n  Windows: Scarica da https://ffmpeg.org/download.html",
+    "yt_dlp_install": "yt-dlp:\n  pip install yt-dlp\n  oppure\n  pip install git+https://github.com/yt-dlp/yt-dlp.git",
+    "ok": "OK"
+  }
+}
+

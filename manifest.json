@@ -1,0 +1,15 @@
+[
+	{
+		"name": "SpiceDL",
+		"description": "Download musics using spotDL",
+		"preview": "./icon.png",
+		"main": "./dist/spicedl.js",
+		"readme": "README.md",
+		"authors": [
+			{ "name": "FoxRefire", "url": "https://github.com/FoxRefire" }
+		],
+		"tags": [
+			"download", "playlist", "downloader", "spotDL"
+		]
+	}
+]

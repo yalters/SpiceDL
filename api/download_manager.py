@@ -1,0 +1,650 @@
+"""
+Download manager for API integration
+"""
+import subprocess
+import threading
+import os
+import json
+import shutil
+import sys
+import re
+from typing import Dict, Optional
+from datetime import datetime
+from pathlib import Path
+
+
+class DownloadManager:
+    """Manages SpiceDL downloads and tracks their progress"""
+    
+    def __init__(self, download_folder: str = "./downloads"):
+        self.download_folder = Path(download_folder).resolve()
+        try:
+            self.download_folder.mkdir(parents=True, exist_ok=True)
+        except (PermissionError, OSError) as e:
+            # If we can't create the folder, try using a fallback location
+            fallback_folder = Path.home() / "Music" / "SpiceDL"
+            print(f"Warning: Could not create download folder at {self.download_folder}: {e}")
+            print(f"Using fallback location: {fallback_folder}")
+            self.download_folder = fallback_folder
+            try:
+                self.download_folder.mkdir(parents=True, exist_ok=True)
+            except Exception as e2:
+                raise RuntimeError(
+                    f"Failed to create download folder at both {download_folder} and {fallback_folder}. "
+                    f"Please check permissions or set a different download folder in settings. "
+                    f"Error: {e2}"
+                ) from e2
+        self.downloads: Dict[str, Dict] = {}
+        self.lock = threading.Lock()
+        self.spotdl_command = self._find_spotdl_command()
+        self.ffmpeg_command = self._find_ffmpeg_command()
+        self.yt_dlp_command = self._find_yt_dlp_command()
+        # Limit concurrent spotDL processes to avoid overloading the system/network
+        self.max_concurrent_downloads = 3
+        self._download_semaphore = threading.Semaphore(self.max_concurrent_downloads)
+    
+    def _get_url_type(self, url: str) -> str:
+        """Extract URL type from Spotify URL"""
+        try:
+            if "/track/" in url:
+                return "track"
+            elif "/album/" in url:
+                return "album"
+            elif "/playlist/" in url:
+                return "playlist"
+            elif "/artist/" in url:
+                return "artist"
+            else:
+                return "unknown"
+        except:
+            return "unknown"
+    
+    def _find_spotdl_command(self) -> list:
+        """
+        Find spotDL command. Try multiple methods:
+        1. 'spotdl' command in PATH
+        2. 'python -m spotdl'
+        3. 'python3 -m spotdl'
+        """
+        # Try 'spotdl' command directly
+        spotdl_path = shutil.which("spotdl")
+        if spotdl_path:
+            return ["spotdl"]
+        
+        # Try 'python -m spotdl'
+        python_path = shutil.which("python")
+        if python_path:
+            try:
+                result = subprocess.run(
+                    [python_path, "-m", "spotdl", "--version"],
+                    capture_output=True,
+                    timeout=5
+                )
+                if result.returncode == 0:
+                    return [python_path, "-m", "spotdl"]
+            except:
+                pass
+        
+        # Try 'python3 -m spotdl'
+        python3_path = shutil.which("python3")
+        if python3_path:
+            try:
+                result = subprocess.run(
+                    [python3_path, "-m", "spotdl", "--version"],
+                    capture_output=True,
+                    timeout=5
+                )
+                if result.returncode == 0:
+                    return [python3_path, "-m", "spotdl"]
+            except:
+                pass
+        
+        # Try using sys.executable (current Python interpreter)
+        try:
+            result = subprocess.run(
+                [sys.executable, "-m", "spotdl", "--version"],
+                capture_output=True,
+                timeout=5
+            )
+            if result.returncode == 0:
+                return [sys.executable, "-m", "spotdl"]
+        except:
+            pass
+        
+        # If nothing works, return None (will raise error later)
+        return None
+    
+    def _find_ffmpeg_command(self) -> Optional[str]:
+        """
+        Find ffmpeg command in PATH
+        Returns the path to ffmpeg if found, None otherwise
+        """
+        ffmpeg_path = shutil.which("ffmpeg")
+        
+        if ffmpeg_path:
+            # Verify it's actually ffmpeg by checking version
+            try:
+                # Explicitly set stdin/stdout/stderr for Nuitka onefile compatibility
+                # On Windows, use CREATE_NO_WINDOW to avoid console window creation
+                run_kwargs = {
+                    "stdin": subprocess.DEVNULL,
+                    "stdout": subprocess.PIPE,
+                    "stderr": subprocess.PIPE,
+                    "timeout": 5
+                }
+                if sys.platform == "win32" and hasattr(subprocess, "CREATE_NO_WINDOW"):
+                    run_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+                
+                result = subprocess.run([ffmpeg_path, "-version"], **run_kwargs)
+                
+                if result.returncode == 0:
+                    return ffmpeg_path
+            except Exception:
+                pass
+        
+        # Try alternative methods for Windows/Nuitka
+        if sys.platform == "win32" and ffmpeg_path is None:
+            # Try using 'where' command on Windows
+            try:
+                # Explicitly set stdin/stdout/stderr for Nuitka onefile compatibility
+                run_kwargs = {
+                    "stdin": subprocess.DEVNULL,
+                    "stdout": subprocess.PIPE,
+                    "stderr": subprocess.PIPE,
+                    "text": True,
+                    "timeout": 5
+                }
+                if sys.platform == "win32" and hasattr(subprocess, "CREATE_NO_WINDOW"):
+                    run_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+                
+                where_result = subprocess.run(["where", "ffmpeg"], **run_kwargs)
+                
+                if where_result.returncode == 0 and where_result.stdout:
+                    potential_path = where_result.stdout.strip().split('\n')[0].strip()
+                    if potential_path:
+                        # Verify it works
+                        try:
+                            # Explicitly set stdin/stdout/stderr for Nuitka onefile compatibility
+                            run_kwargs = {
+                                "stdin": subprocess.DEVNULL,
+                                "stdout": subprocess.PIPE,
+                                "stderr": subprocess.PIPE,
+                                "timeout": 5
+                            }
+                            if sys.platform == "win32" and hasattr(subprocess, "CREATE_NO_WINDOW"):
+                                run_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+                            
+                            verify_result = subprocess.run([potential_path, "-version"], **run_kwargs)
+                            if verify_result.returncode == 0:
+                                return potential_path
+                        except:
+                            pass
+            except Exception:
+                pass
+        
+        return None
+    
+    def _find_yt_dlp_command(self) -> Optional[str]:
+        """
+        Find yt-dlp command. Try multiple methods:
+        1. 'yt-dlp' command in PATH
+        2. 'python -m yt_dlp'
+        3. 'python3 -m yt_dlp'
+        """
+        # Try 'yt-dlp' command directly
+        yt_dlp_path = shutil.which("yt-dlp")
+        if yt_dlp_path:
+            # Verify it's actually yt-dlp by checking version
+            try:
+                run_kwargs = {
+                    "stdin": subprocess.DEVNULL,
+                    "stdout": subprocess.PIPE,
+                    "stderr": subprocess.PIPE,
+                    "timeout": 5
+                }
+                if sys.platform == "win32" and hasattr(subprocess, "CREATE_NO_WINDOW"):
+                    run_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+                
+                result = subprocess.run([yt_dlp_path, "--version"], **run_kwargs)
+                if result.returncode == 0:
+                    return yt_dlp_path
+            except Exception:
+                pass
+        
+        # Try 'python -m yt_dlp'
+        python_path = shutil.which("python")
+        if python_path:
+            try:
+                run_kwargs = {
+                    "stdin": subprocess.DEVNULL,
+                    "stdout": subprocess.PIPE,
+                    "stderr": subprocess.PIPE,
+                    "timeout": 5
+                }
+                if sys.platform == "win32" and hasattr(subprocess, "CREATE_NO_WINDOW"):
+                    run_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+                
+                result = subprocess.run(
+                    [python_path, "-m", "yt_dlp", "--version"],
+                    **run_kwargs
+                )
+                if result.returncode == 0:
+                    return f"{python_path} -m yt_dlp"
+            except:
+                pass
+        
+        # Try 'python3 -m yt_dlp'
+        python3_path = shutil.which("python3")
+        if python3_path:
+            try:
+                run_kwargs = {
+                    "stdin": subprocess.DEVNULL,
+                    "stdout": subprocess.PIPE,
+                    "stderr": subprocess.PIPE,
+                    "timeout": 5
+                }
+                if sys.platform == "win32" and hasattr(subprocess, "CREATE_NO_WINDOW"):
+                    run_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+                
+                result = subprocess.run(
+                    [python3_path, "-m", "yt_dlp", "--version"],
+                    **run_kwargs
+                )
+                if result.returncode == 0:
+                    return f"{python3_path} -m yt_dlp"
+            except:
+                pass
+        
+        # Try using sys.executable (current Python interpreter)
+        try:
+            run_kwargs = {
+                "stdin": subprocess.DEVNULL,
+                "stdout": subprocess.PIPE,
+                "stderr": subprocess.PIPE,
+                "timeout": 5
+            }
+            if sys.platform == "win32" and hasattr(subprocess, "CREATE_NO_WINDOW"):
+                run_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+            
+            result = subprocess.run(
+                [sys.executable, "-m", "yt_dlp", "--version"],
+                **run_kwargs
+            )
+            if result.returncode == 0:
+                return f"{sys.executable} -m yt_dlp"
+        except:
+            pass
+        
+        return None
+    
+    def check_dependencies(self) -> Dict[str, bool]:
+        """
+        Check if required dependencies (spotdl, ffmpeg, and yt-dlp) are installed
+        Returns a dict with 'spotdl', 'ffmpeg', and 'yt_dlp' keys indicating if each is available
+        """
+        return {
+            "spotdl": self.spotdl_command is not None,
+            "ffmpeg": self.ffmpeg_command is not None,
+            "yt_dlp": self.yt_dlp_command is not None
+        }
+    
+    def get_missing_dependencies(self) -> list:
+        """
+        Get list of missing dependencies
+        Returns a list of dependency names that are not installed
+        """
+        deps = self.check_dependencies()
+        missing = []
+        if not deps["spotdl"]:
+            missing.append("spotdl")
+        if not deps["ffmpeg"]:
+            missing.append("ffmpeg")
+        if not deps["yt_dlp"]:
+            missing.append("yt_dlp")
+        return missing
+    
+    def start_download(self, spotify_url: str, overwrite: str = "skip") -> str:
+        """
+        Start a download for a Spotify URL
+        overwrite: "skip" (default), "force"/"overwrite", or "metadata"
+        Returns download ID
+        """
+        # Check dependencies before starting
+        missing = self.get_missing_dependencies()
+        if missing:
+            missing_list = ", ".join(missing)
+            raise RuntimeError(
+                f"Missing required dependencies: {missing_list}. "
+                f"Please install them before downloading."
+            )
+
+        if overwrite == "overwrite":
+            overwrite = "force"
+        if overwrite not in ("skip", "force", "metadata"):
+            overwrite = "skip"
+
+        download_id = f"dl_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
+
+        with self.lock:
+            self.downloads[download_id] = {
+                "id": download_id,
+                "url": spotify_url,
+                "status": "queued",
+                "progress": 0,
+                "message": "Queued...",
+                "started_at": datetime.now().isoformat(),
+                "completed_at": None,
+                "error": None,
+                "process": None,
+                "total_tracks": None,
+                "completed_tracks": 0,
+                "overwrite": overwrite,
+            }
+
+        # Start download in a separate thread
+        thread = threading.Thread(
+            target=self._download_worker,
+            args=(download_id, spotify_url, overwrite),
+            daemon=True
+        )
+        thread.start()
+
+        return download_id
+    
+    def _download_worker(self, download_id: str, spotify_url: str, overwrite: str = "skip"):
+        """Worker thread that executes spotDL download"""
+        acquired = False
+        try:
+            # Wait for an available download slot to avoid running too many spotDL processes at once
+            while True:
+                with self.lock:
+                    if download_id not in self.downloads or self.downloads[download_id].get("status") == "cancelled":
+                        return
+                    self.downloads[download_id]["status"] = "queued"
+                    self.downloads[download_id]["message"] = "Queued (waiting for an available slot)..."
+                acquired = self._download_semaphore.acquire(timeout=1)
+                if acquired:
+                    break
+
+            with self.lock:
+                if download_id not in self.downloads or self.downloads[download_id].get("status") == "cancelled":
+                    return
+                self.downloads[download_id]["status"] = "downloading"
+                self.downloads[download_id]["message"] = "Starting spotDL..."
+            
+            # Check if spotDL command is available
+            if self.spotdl_command is None:
+                raise FileNotFoundError(
+                    "spotDL not found. Please install it using:\n"
+                    "  pip install spotdl\n"
+                    "or\n"
+                    "  pip install git+https://github.com/spotDL/spotify-downloader.git"
+                )
+            
+            # Determine URL type
+            url_type = self._get_url_type(spotify_url)
+            
+            # For albums and playlists, organize by album folders
+            # Use spotDL's output template to create folder structure
+            # Format: {album-artist}/{album}/{track-number} - {title}.{output-ext}
+            # This will create folders like "Artist Name/Album Name/track.mp3"
+            # spotDL supports template strings in --output option
+            if url_type in ["album", "playlist"]:
+                # Create output path with template
+                # spotDL will interpret template variables like {album-artist}, {album}, etc.
+                output_template = str(self.download_folder / "{album-artist} - {album}" / "{track-number} - {title}.{output-ext}")
+            else:
+                # For other types, use default structure
+                output_template = str(self.download_folder / "{artist} - {title}.{output-ext}")
+            
+            # Get list of files before download (recursively for folder comparison)
+            files_before = set()
+            if self.download_folder.exists():
+                for f in self.download_folder.rglob("*"):
+                    if f.is_file():
+                        files_before.add(f.relative_to(self.download_folder))
+            
+            # Build spotDL command with --simple-tui for better progress tracking
+            # Use output template to organize files by album folders
+            cmd = self.spotdl_command + [
+                "download",
+                spotify_url,
+                "--output", output_template,
+                "--format", "mp3",
+                "--simple-tui",
+                "--playlist-retain-track-cover",
+                "--overwrite", overwrite,
+            ]
+            
+            # Log the command being executed
+            print(f"Executing spotDL command: {' '.join(cmd)}")
+            print(f"Download folder: {self.download_folder}")
+            
+            # Start process
+            # Prepare subprocess arguments
+            # Explicitly set stdin/stdout/stderr for Nuitka onefile compatibility
+            popen_kwargs = {
+                "stdin": subprocess.DEVNULL,  # Fix for WinError 6 in Nuitka builds
+                "stdout": subprocess.PIPE,
+                "stderr": subprocess.STDOUT,  # Combine stderr into stdout
+                "text": True,
+                "bufsize": 1,
+                "universal_newlines": True
+            }
+            
+            # On Windows, use CREATE_NO_WINDOW to avoid console window creation
+            if sys.platform == "win32" and hasattr(subprocess, "CREATE_NO_WINDOW"):
+                popen_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+            
+            process = subprocess.Popen(cmd, **popen_kwargs)
+            
+            with self.lock:
+                self.downloads[download_id]["process"] = process
+                # Initialize track counters
+                self.downloads[download_id]["total_tracks"] = None
+                self.downloads[download_id]["completed_tracks"] = 0
+            
+            # Read output line by line to track progress
+            output_lines = []
+            
+            for line in process.stdout:
+                if line:
+                    output_lines.append(line)
+                    line_stripped = line.strip()
+                    print(f"spotDL: {line_stripped}")
+                    
+                    # Parse progress from --simple-tui output
+                    # Format examples: "Downloading 1/10", "Downloaded 5/10", etc.
+                    # Also look for patterns like "[1/10]" or "(1/10)"
+                    progress_match = re.search(r'(\d+)/(\d+)', line_stripped)
+                    if progress_match:
+                        completed = int(progress_match.group(1))
+                        total = int(progress_match.group(2))
+                        with self.lock:
+                            self.downloads[download_id]["completed_tracks"] = completed
+                            self.downloads[download_id]["total_tracks"] = total
+                            if total > 0:
+                                self.downloads[download_id]["progress"] = min(int((completed / total) * 100), 100)
+                            self.downloads[download_id]["message"] = f"Downloading {completed}/{total} tracks"
+                    
+                    # Try to parse progress from spotDL output
+                    if "Downloading" in line or "downloading" in line.lower() or "Fetching" in line or "Converting" in line:
+                        with self.lock:
+                            if not progress_match:  # Only update message if we didn't already update it
+                                self.downloads[download_id]["message"] = line_stripped
+                    elif "%" in line and not progress_match:
+                        try:
+                            percent = int(line.split("%")[0].split()[-1])
+                            with self.lock:
+                                self.downloads[download_id]["progress"] = min(percent, 100)
+                        except:
+                            pass
+                    elif "error" in line.lower() or "failed" in line.lower() or "exception" in line.lower():
+                        with self.lock:
+                            current_error = self.downloads[download_id].get("error") or ""
+                            if line_stripped not in current_error:
+                                self.downloads[download_id]["error"] = (current_error + "\n" + line_stripped).strip() if current_error else line_stripped
+            
+            # Wait for process to complete
+            return_code = process.wait()
+            
+            # Get full output
+            full_output = "\n".join(output_lines)
+            
+            # Wait a bit for file system to sync
+            import time
+            time.sleep(1)
+            
+            # Check if files were actually created (recursively for folder structure)
+            files_after = set()
+            if self.download_folder.exists():
+                for f in self.download_folder.rglob("*"):
+                    if f.is_file():
+                        files_after.add(f.relative_to(self.download_folder))
+            
+            new_files = files_after - files_before
+            
+            with self.lock:
+                # Check if download was cancelled before updating status
+                current_status = self.downloads[download_id].get("status")
+                if current_status == "cancelled":
+                    # Don't overwrite cancelled status
+                    return
+                
+                if return_code == 0:
+                    # Double-check status wasn't cancelled during processing
+                    if self.downloads[download_id].get("status") == "cancelled":
+                        return
+                    # Check if files were actually created
+                    if new_files:
+                        self.downloads[download_id]["status"] = "completed"
+                        self.downloads[download_id]["progress"] = 100
+                        # Convert Path objects to strings for JSON serialization
+                        new_files_str = [str(f) for f in new_files]
+                        file_list = ", ".join(new_files_str[:5])  # Show first 5 files
+                        if len(new_files_str) > 5:
+                            file_list += f" and {len(new_files_str) - 5} more"
+                        self.downloads[download_id]["message"] = f"Download completed successfully. Files: {file_list}"
+                        self.downloads[download_id]["completed_at"] = datetime.now().isoformat()
+                        self.downloads[download_id]["downloaded_files"] = new_files_str
+                    else:
+                        # No new files created. With --overwrite skip this can mean all tracks already existed.
+                        out_lower = (full_output or "").lower()
+                        skipped_markers = ("skipping", "already downloaded", "already exists", "duplicate", "looked up 0", "downloaded 0")
+                        is_skipped = overwrite == "skip" or any(m in out_lower for m in skipped_markers)
+                        if is_skipped and return_code == 0:
+                            self.downloads[download_id]["status"] = "completed"
+                            self.downloads[download_id]["progress"] = 100
+                            self.downloads[download_id]["message"] = "Skipped (files already exist)"
+                            self.downloads[download_id]["completed_at"] = datetime.now().isoformat()
+                            self.downloads[download_id]["downloaded_files"] = []
+                        else:
+                            # Process returned 0 but no files were created
+                            self.downloads[download_id]["status"] = "failed"
+                            self.downloads[download_id]["message"] = "Download completed but no files were created"
+                            self.downloads[download_id]["error"] = full_output if full_output else "No output from spotDL. Check if spotDL is properly installed and configured."
+                            self.downloads[download_id]["completed_at"] = datetime.now().isoformat()
+                            print(f"Warning: spotDL returned 0 but no files were created in {self.download_folder}")
+                            print(f"Full output: {full_output}")
+                else:
+                    # Check again if status was cancelled during the lock
+                    if self.downloads[download_id].get("status") != "cancelled":
+                        self.downloads[download_id]["status"] = "failed"
+                        self.downloads[download_id]["message"] = f"Download failed with code {return_code}"
+                        self.downloads[download_id]["error"] = full_output if full_output else f"Process exited with code {return_code}"
+                        self.downloads[download_id]["completed_at"] = datetime.now().isoformat()
+                        print(f"Error: spotDL failed with return code {return_code}")
+                        print(f"Full output: {full_output}")
+        
+        except FileNotFoundError as e:
+            # spotDL command not found
+            with self.lock:
+                # Don't overwrite cancelled status
+                if self.downloads[download_id].get("status") != "cancelled":
+                    self.downloads[download_id]["status"] = "failed"
+                    error_msg = str(e)
+                    self.downloads[download_id]["message"] = "spotDL not found"
+                    self.downloads[download_id]["error"] = error_msg
+                    self.downloads[download_id]["completed_at"] = datetime.now().isoformat()
+        except Exception as e:
+            import traceback
+            tb = traceback.format_exc()
+            print(f"Download error for {download_id}: {tb}")
+            with self.lock:
+                # Don't overwrite cancelled status
+                if self.downloads[download_id].get("status") != "cancelled":
+                    self.downloads[download_id]["status"] = "failed"
+                    error_msg = str(e)
+                    self.downloads[download_id]["message"] = f"Error: {error_msg}"
+                    self.downloads[download_id]["error"] = f"{error_msg}\n{tb}"
+                    self.downloads[download_id]["completed_at"] = datetime.now().isoformat()
+        finally:
+            if acquired:
+                self._download_semaphore.release()
+    
+    def get_status(self, download_id: Optional[str] = None) -> Dict:
+        """
+        Get download status
+        If download_id is None, returns all downloads
+        """
+        def _serialize_download(download: Dict) -> Dict:
+            """Convert download dict to JSON-serializable format"""
+            serialized = download.copy()
+            # Remove process object (not JSON serializable)
+            if "process" in serialized:
+                process = serialized.pop("process")
+                # Add process status info if available
+                if process is not None:
+                    try:
+                        # Check if process is still running
+                        poll_result = process.poll()
+                        serialized["process_running"] = poll_result is None
+                        if poll_result is not None:
+                            serialized["process_return_code"] = poll_result
+                    except:
+                        serialized["process_running"] = False
+                else:
+                    serialized["process_running"] = False
+            
+            # Convert any Path objects to strings
+            if "downloaded_files" in serialized and serialized["downloaded_files"]:
+                serialized["downloaded_files"] = [str(f) if isinstance(f, Path) else f for f in serialized["downloaded_files"]]
+            
+            return serialized
+        
+        with self.lock:
+            if download_id:
+                download = self.downloads.get(download_id)
+                if download is None:
+                    return {"error": "Download not found"}
+                return _serialize_download(download)
+            else:
+                return {
+                    "downloads": [_serialize_download(dl) for dl in self.downloads.values()],
+                    "total": len(self.downloads)
+                }
+    
+    def cancel_download(self, download_id: str) -> bool:
+        """Cancel a running download"""
+        with self.lock:
+            if download_id not in self.downloads:
+                return False
+            
+            download = self.downloads[download_id]
+            if download["status"] in ["queued", "starting", "downloading"]:
+                process = download.get("process")
+                if process:
+                    try:
+                        process.terminate()
+                        process.wait(timeout=5)
+                    except:
+                        process.kill()
+                
+                download["status"] = "cancelled"
+                download["message"] = "Download cancelled"
+                download["completed_at"] = datetime.now().isoformat()
+                return True
+        
+        return False
+
+

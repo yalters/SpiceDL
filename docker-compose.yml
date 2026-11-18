@@ -1,0 +1,16 @@
+services:
+  spicedl-server:
+    image: spicedl-spicedl-server:latest
+    container_name: spicedl-server
+    user: "0:0"
+    environment:
+      SPICEDL_HOST_DOWNLOAD_PATH: /home/yalters/SpiceDL/Music/SpiceDL
+    command: >
+      sh -c "python -m pip install --no-cache-dir --upgrade
+      'https://github.com/spotDL/spotify-downloader/archive/refs/heads/master.zip'
+      || echo 'spotdl update failed, continuing with installed version';
+      exec python app.py"
+    ports:
+      - "127.0.0.1:5985:5985"
+    volumes:
+      - ./Music/SpiceDL:/home/appuser/Music/SpiceDL

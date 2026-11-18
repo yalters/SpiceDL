@@ -1,0 +1,45 @@
+{
+  "ui": {
+    "title": "SpiceDL API Settings",
+    "subtitle": "Configure your download settings and server preferences",
+    "download_settings": "Download Settings",
+    "download_folder": "Download Folder",
+    "download_folder_placeholder": "Select a folder for downloads...",
+    "browse": "Browse...",
+    "server_settings": "Server Settings",
+    "host_address": "Host Address",
+    "port_number": "Port Number",
+    "cancel": "Cancel",
+    "save": "Save",
+    "select_download_folder": "Select Download Folder",
+    "success": "Success",
+    "settings_saved": "Settings saved successfully!",
+    "error": "Error",
+    "invalid_input": "Invalid input: {message}",
+    "failed_to_save": "Failed to save settings: {message}",
+    "port_required": "Port number is required",
+    "port_range": "Port must be between 1 and 65535",
+    "folder_required": "Download folder is required",
+    "host_required": "Host address is required"
+  },
+  "tray": {
+    "tooltip": "SpiceDL API Server",
+    "settings": "Settings",
+    "status": "Status",
+    "quit": "Quit",
+    "active_downloads": "Active downloads: {count}"
+  },
+  "dependencies": {
+    "title": "Required Dependencies Not Found",
+    "message": "The following dependencies are not installed:\n\n{missing}\n\nThese must be installed to use the download functionality.",
+    "spotdl_not_found": "spotdl",
+    "ffmpeg_not_found": "ffmpeg",
+    "yt_dlp_not_found": "yt-dlp",
+    "install_instructions": "Installation instructions:",
+    "spotdl_install": "spotdl:\n  pip install spotdl\n  or\n  pip install git+https://github.com/spotDL/spotify-downloader.git",
+    "ffmpeg_install": "ffmpeg:\n  Linux: sudo apt-get install ffmpeg\n  macOS: brew install ffmpeg\n  Windows: Download from https://ffmpeg.org/download.html",
+    "yt_dlp_install": "yt-dlp:\n  pip install yt-dlp\n  or\n  pip install git+https://github.com/yt-dlp/yt-dlp.git",
+    "ok": "OK"
+  }
+}
+

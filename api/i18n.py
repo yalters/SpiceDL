@@ -1,0 +1,270 @@
+"""
+Internationalization (i18n) support for the API GUI
+"""
+import json
+import locale
+import os
+import sys
+from pathlib import Path
+from typing import Dict, Any, Optional
+
+
+class I18n:
+    """Internationalization manager"""
+    
+    def __init__(self, locale_dir: Optional[str] = None):
+        """
+        Initialize i18n manager
+        
+        Args:
+            locale_dir: Directory containing locale files (default: locales/ in same directory as this file)
+        """
+        if locale_dir is None:
+            # For Nuitka builds, check sys._MEIPASS (temporary extraction directory)
+            # For regular Python execution, use __file__ location
+            if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+                # Nuitka onefile mode: files are extracted to _MEIPASS
+                base_dir = Path(sys._MEIPASS)
+            else:
+                # Regular Python execution: use __file__ location
+                base_dir = Path(__file__).parent
+            
+            self.locale_dir = base_dir / "locales"
+        else:
+            self.locale_dir = Path(locale_dir)
+        
+        self.locale_dir.mkdir(exist_ok=True)
+        
+        self.current_language = "en"
+        self.translations: Dict[str, Dict[str, str]] = {}
+        self._load_language("en")  # Load English as default
+    
+    def set_language(self, lang: str):
+        """
+        Set the current language
+        
+        Args:
+            lang: Language code (e.g., 'en', 'ja')
+        """
+        if lang and lang != self.current_language:
+            self.current_language = lang
+            self._load_language(lang)
+    
+    def get_language(self) -> str:
+        """Get the current language code"""
+        return self.current_language
+    
+    def detect_language(self) -> str:
+        """
+        Detect system language from environment variables and system locale
+        
+        Priority:
+        1. LANG environment variable
+        2. LC_ALL environment variable
+        3. System locale (locale.getdefaultlocale())
+        
+        Returns:
+            Language code (default: 'en')
+        """
+        # Priority 1: Check LANG environment variable
+        lang_env = os.environ.get("LANG")
+        if lang_env:
+            # Handle special cases: C and POSIX mean English
+            if lang_env.upper() in ("C", "POSIX"):
+                return "en"
+            
+            # LANG format is usually like "en_US.UTF-8" or "ja_JP.UTF-8" or "zh_CN.UTF-8"
+            # Handle Chinese variants: zh_CN -> zh_CN, zh_TW -> zh_TW, zh -> zh_CN (default)
+            parts = lang_env.split("_")
+            if len(parts) >= 2 and parts[0].lower() == "zh":
+                # Chinese variant
+                region = parts[1].split(".")[0].upper()
+                if region in ("CN", "HANS", "HAN"):
+                    lang = "zh_CN"
+                elif region in ("TW", "HK", "MO", "HANT"):
+                    lang = "zh_TW"
+                else:
+                    lang = "zh_CN"  # Default to simplified
+            else:
+                lang = parts[0].split(".")[0].lower()
+            
+            if self._has_translations(lang):
+                return lang
+        
+        # Priority 2: Check LC_ALL environment variable
+        lc_all = os.environ.get("LC_ALL")
+        if lc_all:
+            # Handle special cases: C and POSIX mean English
+            if lc_all.upper() in ("C", "POSIX"):
+                return "en"
+            
+            # Handle Chinese variants
+            parts = lc_all.split("_")
+            if len(parts) >= 2 and parts[0].lower() == "zh":
+                region = parts[1].split(".")[0].upper()
+                if region in ("CN", "HANS", "HAN"):
+                    lang = "zh_CN"
+                elif region in ("TW", "HK", "MO", "HANT"):
+                    lang = "zh_TW"
+                else:
+                    lang = "zh_CN"
+            else:
+                lang = parts[0].split(".")[0].lower()
+            
+            if self._has_translations(lang):
+                return lang
+        
+        # Priority 3: Check LC_MESSAGES environment variable
+        lc_messages = os.environ.get("LC_MESSAGES")
+        if lc_messages:
+            # Handle special cases: C and POSIX mean English
+            if lc_messages.upper() in ("C", "POSIX"):
+                return "en"
+            
+            # Handle Chinese variants
+            parts = lc_messages.split("_")
+            if len(parts) >= 2 and parts[0].lower() == "zh":
+                region = parts[1].split(".")[0].upper()
+                if region in ("CN", "HANS", "HAN"):
+                    lang = "zh_CN"
+                elif region in ("TW", "HK", "MO", "HANT"):
+                    lang = "zh_TW"
+                else:
+                    lang = "zh_CN"
+            else:
+                lang = parts[0].split(".")[0].lower()
+            
+            if self._has_translations(lang):
+                return lang
+        
+        # Priority 4: Try to get system locale
+        try:
+            system_locale, _ = locale.getdefaultlocale()
+            if system_locale:
+                # Handle Chinese variants
+                parts = system_locale.split("_")
+                if len(parts) >= 2 and parts[0].lower() == "zh":
+                    region = parts[1].split(".")[0].upper()
+                    if region in ("CN", "HANS", "HAN"):
+                        lang = "zh_CN"
+                    elif region in ("TW", "HK", "MO", "HANT"):
+                        lang = "zh_TW"
+                    else:
+                        lang = "zh_CN"
+                else:
+                    lang = parts[0].split(".")[0].lower()
+                
+                if self._has_translations(lang):
+                    return lang
+        except Exception:
+            pass
+        
+        # Default to English
+        return "en"
+    
+    def _has_translations(self, lang: str) -> bool:
+        """Check if translations exist for a language"""
+        if not lang:
+            return False
+        locale_file = self.locale_dir / f"{lang}.json"
+        return locale_file.exists()
+    
+    def _load_language(self, lang: str):
+        """Load translations for a language"""
+        locale_file = self.locale_dir / f"{lang}.json"
+        
+        if locale_file.exists():
+            try:
+                with open(locale_file, "r", encoding="utf-8") as f:
+                    self.translations[lang] = json.load(f)
+            except Exception as e:
+                print(f"Error loading locale file {locale_file}: {e}")
+                # Fallback to English if loading fails
+                if lang != "en":
+                    print(f"Falling back to English due to error")
+                    self._load_language("en")
+                    self.current_language = "en"
+        else:
+            # If language file doesn't exist, load English as fallback
+            if lang != "en":
+                print(f"Locale file {locale_file} not found, language '{lang}' is not supported. Falling back to English.")
+                self._load_language("en")
+                self.current_language = "en"
+            else:
+                # Even for English, if file doesn't exist, create a minimal translation
+                print(f"Warning: English locale file not found, using minimal translations")
+                self.translations["en"] = {}
+    
+    def t(self, key: str, **kwargs) -> str:
+        """
+        Translate a key
+        
+        Args:
+            key: Translation key (can use dot notation, e.g., 'ui.title')
+            **kwargs: Format arguments for the translation string
+        
+        Returns:
+            Translated string, or the key if translation not found
+        """
+        # Get translations for current language
+        translations = self.translations.get(self.current_language, {})
+        
+        # Support dot notation for nested keys
+        value = translations
+        for part in key.split("."):
+            if isinstance(value, dict):
+                value = value.get(part)
+            else:
+                value = None
+                break
+        
+        # If translation not found, try English as fallback
+        if value is None and self.current_language != "en":
+            translations = self.translations.get("en", {})
+            value = translations
+            for part in key.split("."):
+                if isinstance(value, dict):
+                    value = value.get(part)
+                else:
+                    value = None
+                    break
+        
+        # If still not found, return the key
+        if value is None or not isinstance(value, str):
+            return key
+        
+        # Format the string if kwargs are provided
+        if kwargs:
+            try:
+                return value.format(**kwargs)
+            except Exception:
+                return value
+        
+        return value
+
+
+# Global i18n instance
+_i18n_instance: Optional[I18n] = None
+
+
+def get_i18n() -> I18n:
+    """Get the global i18n instance"""
+    global _i18n_instance
+    if _i18n_instance is None:
+        _i18n_instance = I18n()
+    return _i18n_instance
+
+
+def t(key: str, **kwargs) -> str:
+    """
+    Convenience function to translate a key
+    
+    Args:
+        key: Translation key
+        **kwargs: Format arguments
+    
+    Returns:
+        Translated string
+    """
+    return get_i18n().t(key, **kwargs)
+
