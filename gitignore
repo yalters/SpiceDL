@@ -1,0 +1,22 @@
+# Local downloads and runtime data
+Music/
+*.mp3
+*.m4a
+*.flac
+*.ogg
+
+# Local env/build artifacts
+.DS_Store
+node_modules/.cache/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+
+# Docker/local overrides
+*.local
